@@ -1,0 +1,335 @@
+---
+title: "DATA_Exploration as a template for Professional Exploration"
+author: "Xueying Fu"
+date: "31/03/2021"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+urlcolor: blue
+header-includes:    
+  - \usepackage{lastpage}
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhead[CO, CE]{Xueying Fu, 1004147611}
+  - \fancyfoot[CO, CE]{\thepage \ of \pageref{LastPage}}
+---
+
+```{r setup, message = FALSE, echo=FALSE}
+# Students: You probably shouldn't change any of the code in this chunk.
+
+# These are the packages you will need for this activity
+packages_needed <- c("tidyverse", "googledrive", "readxl", "janitor", 
+                     "lubridate", "opendatatoronto", "ggthemes")
+
+package.check <- lapply(
+  packages_needed,
+  FUN = function(x) {
+    if (!require(x, character.only = TRUE)) {
+      install.packages(x, dependencies = TRUE)
+    }
+  }
+)
+
+# Credit: package.check based on a helpful post from Vikram Baliga https://vbaliga.github.io/verify-that-r-packages-are-installed-and-loaded/
+
+# Load tidyverse
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(opendatatoronto)
+library(ggthemes)
+
+# Set so that long lines in R will be wrapped:
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80), echo = FALSE)
+```
+
+```{r load_data, echo=FALSE}
+######################################################
+# Step three: Load the COVID data from Toronto City. #
+######################################################
+
+# Saving the name of the file as an object and then using the object name in the
+# following code is a helpful practice. Why? If we change the name of the file 
+# being used, we'll only have to change it in one place. This helps us avoid 
+# 'human error'.
+
+daily_data <- "~/Desktop/CityofToronto_COVID-19_Daily_Public_Reporting.xlsx"
+
+# Cases reported by date
+reported_raw <- read_excel(daily_data, sheet = 5) %>% 
+  clean_names()
+
+# Cases by outbreak type
+outbreak_raw <- read_excel(daily_data, sheet = 3) %>% 
+  clean_names()
+
+# When was this data updated?
+date_daily <- read_excel(daily_data, sheet = 1) %>% 
+  clean_names()
+
+# By neighbourhood
+neighbourood_data <- "~/Desktop/CityofToronto_COVID-19_NeighbourhoodData.xlsx"
+
+# Cases reported by date
+nbhood_raw <- read_excel(neighbourood_data, sheet = 2) %>% 
+  clean_names()
+
+# Date the neighbourhood data was last updated
+date_nbhood <- read_excel(neighbourood_data, sheet = 1) %>% 
+  clean_names()
+
+#don't need these anymore
+rm(daily_data, neighbourood_data)
+
+#############################################################
+# Step four: Load the neighbourhood data from Toronto City. #
+#############################################################
+
+# Get neighbourhood profile data
+nbhood_profile <- readRDS("~/Desktop/neighbourhood_profile.Rds")
+
+# Get shape data for mapping 
+nbhoods_shape_raw <- readRDS("~/Desktop/neighbourhood_shapefile.Rds") %>% 
+  sf::st_as_sf() ## Makes sure shape info is in the most up to date format
+
+```
+
+
+Code last run `r Sys.Date()`.  
+Daily: `r date_daily[1,1]`.   
+Neighbourhood: `r date_nbhood[1,1]`. 
+
+# Task 1: Daily cases
+## Data wrangling
+```{r cases_dw, echo=TRUE}
+# We use mutate_if function to replace the NA's, and overwrite `reported_raw`. Then,
+# we have a new chart called `reported`
+reported <- reported_raw %>%
+  mutate_if(is.numeric, replace_na, replace=0)
+
+# Use date function to tidy the first column where it says reported_date
+reported_Newdate = date(reported$reported_date)
+
+# Use pivot_longer to tidy up the datas
+reported <- reported %>%
+  pivot_longer(-c(reported_date),
+               names_to = "Status", values_to = "Number")
+
+# Use str_to_sentence to capitalize all the words in `Status`, then use mutate to
+# replace the column for `Status`.
+reported <- reported %>%
+  mutate(Status = str_to_sentence(reported$Status))
+
+reported$Status = factor(reported$Status, levels = c("Active", "Recovered", "Deceased"))
+```
+
+\newpage
+## Data visualization
+
+```{r cases_vis, echo=TRUE}
+# Use ggplot function to draw the graph for `Reported`.
+# Use labs functions to add title, subtitle, ...
+# Use scale_fill_manual function to color active, recover, deceased cases.
+reported %>%
+  ggplot(aes(x = reported_date, y = Number, fill = Status)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Cases reported by day in Toronto, Canada",
+       subtitle = "Confirmed and probable cases",
+       x = "Date",
+       y = "Case count",
+       caption = str_c("Created by: Xueying Fu for STA303/1002, U of T\n",
+  "Source: Ontario Ministry of Health, Integrated Public Health Information System and CORES\n",
+  "Date as of ", Sys.Date())) +
+  theme(legend.title = element_blank(), legend.position = c(.15, .8)) +
+  scale_fill_manual(values = c("#003F5C", "#86BCB6", "#B9CA5D"),
+                    breaks = c("Active", "Recovered", "Deceased"))
+
+```
+
+\newpage
+# Task 2: Outbreak type
+## Data wrangling
+
+
+```{r outbreak_dw, echo=TRUE}
+# Name `outbreak_raw` by 'outbreak'
+# Use date function to tidy the first column where it says `episode_week'
+# Use str_to_sentence to capitalize all the words in `Status`, then use mutate to replace the 
+# column for `Status`.
+outbreak <- outbreak_raw %>%
+  mutate(episode_week = date(outbreak_raw$episode_week)) %>%
+  mutate(outbreak_or_sporadic = str_replace_all(outbreak_raw$outbreak_or_sporadic,
+                                                "OB Associated", "Outbreak Associated"))
+         
+# Use summarise function to build up a new column
+total = summarise(group_by(outbreak, episode_week), total_cases = sum(cases))
+
+# Use left_join function to join `outbreak` and `total` charts
+outbreak = left_join(outbreak, total)
+
+# Use factor to clean up the levels for `outbreak_or_sporadic`
+outbreak$outbreak_or_sporadic = factor(outbreak$outbreak_or_sporadic, levels = c("Sporadic",
+                                                                      "Outbreak Associated"))
+
+```
+
+\newpage
+## Data visualization
+
+```{r outbreak_vis, echo=TRUE}
+outbreak %>%
+  ggplot(aes(x = episode_week, y = cases, fill = outbreak_or_sporadic)) +
+  geom_bar(stat = "identity") +
+  scale_x_date(date_labels = "%d %b %y", limits = c(date("2020-01-01"), Sys.Date()+7)) +
+  scale_y_continuous("ymax") +
+  theme_minimal() +
+  labs(title = "Cases by outbreak type and week in Toronto, Canada",
+       subtitle = "Confirmed and probable cases",
+       x = "Date",
+       y = "Case count",
+       caption = str_c("Created by: Xueying Fu for STA303/1002, U of T\n",
+  "Source: Ontario Ministry of Health, Integrated Public Health Information System and CORES\n",
+  "Date as of ", format(Sys.time(), "%B %d, %Y"))) +
+  theme(legend.title = element_blank(), legend.position = c(.15, .8)) +
+  scale_fill_manual(values = c("#86BCB6", "#B9CA5D"),
+                    breaks = c("Sporadic", "Outbreak Associated"))
+```
+
+\newpage
+# Task 3: Neighbourhoods
+## Data wrangling: part 1
+
+```{r nbhood_dw_1, echo=TRUE}
+# First find out the `Topic` with Low income in 2015, then we went through those options
+# and find out the `Characteristic`
+# where it states `18 to 64 years (%)`, which is row 1143.
+indices <- which(nbhood_profile$Topic == "Low income in 2015")
+
+# Use filter function to filter the 1143 row
+income = nbhood_profile %>% 
+  filter(`_id` == 1143)
+
+# Clean and tidy up the data with pivot_longer Function, and use parse_number to
+# avoid character strings
+income <- income %>% 
+  pivot_longer(-c(1:5), names_to = "neighbourhood_name", values_to = "percentage") %>%
+  mutate(percentage = parse_number(percentage))
+
+```
+
+## Data wrangling: part 2
+
+```{r nbhood_dw_2, echo=TRUE}
+# Name `nbhoods_shape_raw` to `nbhoods_all`, then use str_remove and case_when functions
+# to make to names for 
+# `neighbourhood_name` in both income an `nbhood_all` to be the same
+nbhoods_all <- nbhoods_shape_raw %>%
+  mutate(neighbourhood_name = str_remove(AREA_NAME, "\\s\\(\\d+\\)$"))
+
+nbhoods_all <- nbhoods_all %>%
+  mutate(neighbourhood_name = case_when(
+    neighbourhood_name == "Cabbagetown-South St.James Town" ~ "Cabbagetown-South St. James Town",
+    neighbourhood_name == "North St.James Town" ~ "North St. James Town",
+    neighbourhood_name == "Weston-Pellam Park" ~ "Weston-Pelham Park",
+    TRUE ~ neighbourhood_name))
+
+# Use left_join function to join `nbhoods_all`, `income`, and 
+# `nbhood_raw` by `neighbourhood_name`
+nbhoods_all = left_join(nbhoods_all, income, by = "neighbourhood_name")
+nbhoods_all = left_join(nbhoods_all, nbhood_raw, by = "neighbourhood_name")
+
+# Use rename function to change the column title for the data
+nbhoods_all <- nbhoods_all %>%
+  rename(rate_per_100000 = rate_per_100_000_people)
+```
+
+## Data wrangling: part 3
+
+```{r nbhood_dw_3, echo=TRUE}
+# Use median function to calculate the median for `percentage` and `rate_per_100000`,
+# and assign to `med_inc` and `med_rate` respectively
+med_inc <- median(nbhoods_all$percentage, na.rm = TRUE)
+med_rate <- median(nbhoods_all$rate_per_100000, na.rm = TRUE)
+med_inc
+med_rate
+
+# Create a new variable called `nbhood_type`, and classify them by their four
+# case rate and income rate possibilities.
+nbhoods_final <- nbhoods_all %>%
+  mutate(nbhood_type = case_when(percentage >= med_inc & rate_per_100000 >= med_rate
+                                 ~ "Higher low income rate, higher case rate",
+                                 percentage >= med_inc & rate_per_100000 <= med_rate
+                                 ~ "Higher low income rate, lower case rate",
+                                 percentage <= med_inc & rate_per_100000 >= med_rate
+                                 ~ "Lower low income rate, higher case rate",
+                                 percentage <= med_inc & rate_per_100000 <= med_rate
+                                 ~ "Lower low income rate, lower case rate"))
+```
+
+\newpage
+## Data visualization
+
+```{r neighbourhood_graphs_1, fig.height=4, echo=TRUE}
+# Use ggplot to draw the map, and use scales_fill_gradient function to set colors
+# and names for the scale.
+# Then, use labs function to set title, subtitle, etc...
+# Use legend.position = "right" to move the scales to the right
+ggplot(data = nbhoods_final) +
+  geom_sf(aes(fill = percentage)) +
+  theme_map() +
+  scale_fill_gradient(name= "% low income", low = "darkgreen", high = "lightgrey") +
+  labs(title = "Percentage of 18 to 64 year olds living in a low income family (2015)",
+       subtitle = "Neighbourhoods of Toronto, Canada",
+       caption = str_c("Created by: Xueying Fu for STA303/1002, U of T\n",
+                       "Source: Census Profile 98-316-X2016001 via OpenData Toronto\n",
+                       "Date as of ", Sys.Date())) +
+  theme(legend.position = "right")
+
+```
+
+\newpage
+
+```{r neighbourhood_graphs_2, fig.height=4, echo=TRUE}
+# Use ggplot to draw the map, and use scales_fill_gradient function to set colors and
+# names for the scale.
+# Then, use labs function to set title, subtitle, etc...
+# Use legend.position = "right" to move the scales to the right
+ggplot(data = nbhoods_final) +
+  geom_sf(aes(fill = rate_per_100000)) +
+  theme_map() +
+  scale_fill_gradient(name= "Cases per 100,000 people",
+                      low = "white",
+                      high = "darkorange") +
+  labs(title = "COVID-19 cases per 100,000, by neighbourhood in Toronto, Canada",
+  caption = str_c("Created by: Xueying Fu for STA303/1002, U of T\n",
+  "Source: Ontario Ministry of Health, Integrated Public Health Information System and CORES\n",
+  "Date as of ", Sys.Date())) +
+  theme(legend.position = "right")
+```
+
+\newpage
+
+```{r neighbourhood_graphs_3, fig.height=4, echo=TRUE}
+# Use ggplot to draw the map, and use scales_fill_brewer function to set colors and
+# names for the scale
+# Then, use labs function to set title, subtitle, etc...
+# Use legend.position = "right" to move the scales to the right
+ggplot(data = nbhoods_final) +
+  geom_sf(aes(fill = nbhood_type)) +
+  theme_map() +
+  scale_fill_brewer(palette = "Set1",
+  name= "% of 18 to 64 year-olds in \n low income families and \n COVID-19 case rates") +
+  labs(title = "COVID-19 cases per 100,000, by neighbourhood in Toronto, Canada",
+       caption = str_c("Created by: Xueying Fu for STA303/1002, U of T\n",
+       "Income data source: Census Profile 98-316-X2016001 via OpenData Toronto\n",
+       "COVID data source: Ontario Ministry of Health, Integrated Public\n",
+       "Health Information System and CORES\n",
+       "Date as of ", Sys.Date())) +
+  theme(legend.position = "right")
+```
+
+
+
+
+
